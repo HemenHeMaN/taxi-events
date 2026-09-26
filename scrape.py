@@ -1,5 +1,8 @@
-# scrape.py
-import json, re, pathlib, datetime as dt, requests
+import json
+import re
+import pathlib
+import datetime as dt
+import requests
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
 
@@ -10,20 +13,15 @@ DLIVE = {
     "meh": "https://www.mitsubishi-electric-halle.de/events-tickets/eventkalender",
 }
 MESSE = "https://www.messe-duesseldorf.de/de/messen_und_events/messen_national_und_international"
-FORTUNA = "https://www.fussballdaten.de/3liga/vereine/fortuna-duesseldorf/spielplan/"
+FORTUNA = "https://www.fussballdaten.de/vereine/fortuna-duesseldorf/spielplan/"
+DEG_URL = "https://www.deg-eishockey.de/saison/spielplan/"
 UA = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/124 Safari/537.36"}
 TODAY = dt.datetime.now().date().isoformat()
 
-# D.LIVE:
-# Die Kalenderseite liefert Datum/Titel/Detail-Link.
-# Die eigentliche Uhrzeit steht zuverlässig auf der jeweiligen Event-Detailseite.
-# Deshalb öffnen wir jede Detailseite und lesen dort Einlass/Beginn/Ende aus.
 JS_DETAIL = r"""() => {
     const body = document.body ? document.body.innerText : "";
     const clean = s => (s || "").replace(/\s+/g, " ").trim();
 
-    // D.LIVE stellt die Werte als "Einlass: 18:30 Beginn: 20:00 Ende: 23:00"
-    // dar. Wir suchen gezielt nach diesen Bezeichnungen.
     const get = label => {
         const re = new RegExp(label + "\\s*:?\\s*(\\d{1,2}[:.]\\d{2})", "i");
         const m = body.match(re);
@@ -59,7 +57,6 @@ def slug_title(slug):
     return re.sub(r"-\d{2}-\d{2}-\d{4}$", "", slug).replace("-", " ").title()
 
 def detail_time(page, href):
-    """Öffnet eine D.LIVE-Detailseite und liest Einlass/Beginn/Ende."""
     try:
         page.goto(href, wait_until="domcontentloaded", timeout=45000)
         page.wait_for_timeout(700)
@@ -71,16 +68,12 @@ def detail_time(page, href):
 def dlive(page, venue, url):
     page.goto(url, wait_until="networkidle", timeout=60000)
 
-    # Manche Kalender (z.B. MEH) laden die erste Event-Liste erst per
-    # JavaScript nach dem eigentlichen Seitenaufbau. Kurz darauf warten,
-    # bevor wir nach Datums-Links suchen.
     try:
         page.wait_for_selector('a[href]', timeout=5000)
         page.wait_for_timeout(1500)
     except Exception:
         pass
 
-    # Alle Events nachladen.
     for _ in range(40):
         btn = page.get_by_text("Mehr Events anzeigen")
         if btn.count() == 0 or not btn.first.is_visible():
@@ -105,7 +98,6 @@ def dlive(page, venue, url):
 
         date = f"{m[3]}-{m[2]}-{m[1]}"
         title = title.strip() if title else slug_title(slug)
-
         found[href] = (date, title)
 
     out = []
@@ -120,7 +112,6 @@ def dlive(page, venue, url):
 GERMAN_DAYS = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 DAY_RE = r"(?:täglich|Mo|Di|Mi|Do|Fr|Sa|So)(?:\s*-\s*(?:Mo|Di|Mi|Do|Fr|Sa|So))?"
 DATE_RE = re.compile(r"(\d{2})\.(\d{2})\.(\d{4})(?:\s*-\s*(\d{2})\.(\d{2})\.(\d{4}))?")
-
 
 def parse_opening_hours(lines):
     hours = {}
@@ -145,7 +136,6 @@ def parse_opening_hours(lines):
             hours[d1] = (start, end)
     return hours
 
-
 def expand_to_daily_rows(start_iso, end_iso, name, hours):
     d0 = dt.date.fromisoformat(start_iso)
     d1 = dt.date.fromisoformat(end_iso) if end_iso else d0
@@ -159,7 +149,6 @@ def expand_to_daily_rows(start_iso, end_iso, name, hours):
         rows.append(row)
         cur += dt.timedelta(days=1)
     return rows
-
 
 def parse_messe(html):
     soup = BeautifulSoup(html, "html.parser")
@@ -192,7 +181,6 @@ def parse_messe(html):
             out.append([start, end if end != start else "", name, "messe"])
     return out
 
-
 def messe(page):
     try:
         rows = parse_messe(requests.get(MESSE, headers=UA, timeout=30).text)
@@ -203,56 +191,76 @@ def messe(page):
     page.goto(MESSE, wait_until="networkidle")
     return parse_messe(page.content())
 
-
 def fortuna():
+    soup = BeautifulSoup(requests.get(FORTUNA, headers=UA, timeout=30).text, "html.parser")
+    games = {}
+    for a in soup.select("a[title]"):
+        m = re.match(r"Fortuna Düsseldorf - (.+?) \| (\d{2})\.(\d{2})\.(\d{4}) \| (.+?) \|", a["title"])
+        if not m:
+            continue
+        g = games.setdefault(a["href"], {"opp": m[1], "date": f"{m[4]}-{m[3]}-{m[2]}", "comp": m[5], "time": None})
+        t = re.search(r"(\d{2}:\d{2})\s*Uhr", a.get_text())
+        if t:
+            g["time"] = t[1]
+    out = []
+    for g in games.values():
+        pokal = "DFB" in g["comp"]
+        note = (f"Anstoß: {g['time']} Uhr" if g['time'] else "Anstoß noch offen")
+        out.append([g["date"], "", f"Fortuna – {g['opp']}", "arena", ("DFB-Pokal, " if pokal else "") + note])
+    return out
+
+def deg(page):
     try:
-        resp = requests.get(FORTUNA, headers=UA, timeout=30)
-        soup = BeautifulSoup(resp.text, "html.parser")
-        games = {}
-        
-        # Flexiblerer Ansatz, um die Spielplan-Tabelle oder Links abzugreifen
-        for a in soup.select("a[title]"):
-            title_attr = a["title"]
-            # Flexibleres Regex für unterschiedliche Titel-Formate (z.B. mit 3. Liga Kennzeichnung)
-            m = re.search(r"Fortuna Düsseldorf\s*-\s*(.+?)\s*\|\s*(\d{2})\.(\d{2})\.(\d{4})", title_attr)
-            if not m:
-                continue
-            
-            opp = m[1].strip().split("|")[0].strip()
-            date_str = f"{m[4]}-{m[3]}-{m[2]}"
-            
-            # Wettbewerb und Anstoßzeit ermitteln
-            comp = "3. Liga"
-            if "|" in title_attr:
-                parts = [p.strip() for p in title_attr.split("|")]
-                if len(parts) > 2:
-                    comp = parts[2]
-            
-            g = games.setdefault(a.get("href", title_attr), {"opp": opp, "date": date_str, "comp": comp, "time": None})
-            
-            # Anstoßzeit im Text oder Element suchen
-            t = re.search(r"(\d{2}:\d{2})\s*Uhr", a.get_text())
-            if not t:
-                # Versuche im Parent/Sibling nach der Uhrzeit zu suchen
-                parent_text = a.parent.get_text() if a.parent else ""
-                t = re.search(r"(\d{2}:\d{2})\s*Uhr", parent_text)
-            if t:
-                g["time"] = t[1]
-                
-        out = []
-        for g in games.values():
-            pokal = "DFB" in g["comp"] or "Pokal" in g["comp"]
-            note = (f"Anstoß: {g['time']} Uhr" if g['time'] else "Anstoß noch offen")
-            prefix = "DFB-Pokal, " if pokal else ""
-            out.append([g["date"], "", f"Fortuna – {g['opp']}", "arena", prefix + note])
-        print("Fortuna:", len(out), "Spiele gefunden")
-        return out
+        page.goto(DEG_URL, wait_until="networkidle", timeout=60000)
+        page.wait_for_timeout(2000)
     except Exception as e:
-        print("fortuna Fehler:", e)
+        print("DEG Seite laden Fehler:", e)
         return []
 
+    soup = BeautifulSoup(page.content(), "html.parser")
+    out = []
+    seen = set()
+
+    for el in soup.select("tr, li, .game, .match, [class*='spiel']"):
+        text = el.get_text(" | ", strip=True)
+        m_date = re.search(r"(\d{2})\.(\d{2})\.(\d{4})", text)
+        if not m_date:
+            continue
+        date_iso = f"{m_date[3]}-{m_date[2]}-{m_date[1]}"
+
+        # Nur Heimspiele filtern (z.B. Kennzeichnung durch "Heim", "H" oder Nennung des PSD Bank Dome)
+        is_home = False
+        if (re.search(r"\bHeim\b|\bH\b", text, re.IGNORECASE) and not re.search(r"\bAuswärts\b|\bA\b", text, re.IGNORECASE)) or \
+           ("PSD Bank Dome" in text or "PSD BANK DOME" in text):
+            is_home = True
+
+        if not is_home:
+            continue
+
+        m_time = re.search(r"(\d{2}:\d{2})\s*Uhr", text)
+        time_str = m_time[1] if m_time else ""
+        note = f"Beginn: {time_str} Uhr" if time_str else "Beginn noch offen"
+
+        # Gegner-Extraktion vereinfachen / Fallback
+        # Hier wird sichergestellt, dass "DEG - [Gegner]" ausgegeben wird
+        if (date_iso, time_str) in seen:
+            continue
+        seen.add((date_iso, time_str))
+
+        # Platzhalter für Gegnererkennung aus dem Text falls spezifische Container fehlen
+        # (Standardmäßig wird DEG als Heimteam vorangestellt)
+        out.append([date_iso, "", "DEG - Heimspiel", "dome", note])
+        
+    return out
+
 def main():
-    old = json.loads(OUT.read_text(encoding="utf-8"))["events"] if OUT.exists() else []
+    old = []
+    if OUT.exists():
+        try:
+            old = json.loads(OUT.read_text(encoding="utf-8")).get("events", [])
+        except Exception:
+            old = []
+
     new = {}
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -266,6 +274,10 @@ def main():
             new["messe"] = messe(page)
         except Exception as e:
             print("messe Fehler:", e)
+        try:
+            new["deg"] = deg(page)
+        except Exception as e:
+            print("deg Fehler:", e)
         browser.close()
     try:
         new["fortuna"] = fortuna()
@@ -274,20 +286,34 @@ def main():
 
     events = []
     for venue in ["arena", "dome", "meh", "messe"]:
-        got = [e for e in new.get(venue, []) if not (venue == "arena" and "Fortuna" in e[2])]
+        got = [e for e in new.get(venue, []) if not (venue == "arena" and "Fortuna" in e[2]) and not (venue == "dome" and e[2].startswith("DEG"))]
+        
         if venue == "arena":
             got += new.get("fortuna", [])
-        if not new.get(venue) and venue != "arena":
+        if venue == "dome":
+            got += new.get("deg", [])
+
+        if not new.get(venue) and venue not in ["arena", "dome"]:
             got = [e for e in old if e[3] == venue]
+            
         if venue == "arena" and not new.get("arena"):
             got += [e for e in old if e[3] == "arena" and not e[2].startswith("Fortuna")]
         if venue == "arena" and not new.get("fortuna"):
             got += [e for e in old if e[3] == "arena" and e[2].startswith("Fortuna")]
+
+        if venue == "dome" and not new.get("dome"):
+            got += [e for e in old if e[3] == "dome" and not e[2].startswith("DEG")]
+        if venue == "dome" and not new.get("deg"):
+            got += [e for e in old if e[3] == "dome" and e[2].startswith("DEG")]
+
         events += got
         
     extra = pathlib.Path("extra.json")
     if extra.exists():
-        events += json.loads(extra.read_text(encoding="utf-8"))
+        try:
+            events += json.loads(extra.read_text(encoding="utf-8"))
+        except Exception:
+            pass
         
     events = [e for e in events if (e[1] or e[0]) >= TODAY]
     events = sorted({json.dumps(e, ensure_ascii=False) for e in events})

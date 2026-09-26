@@ -158,7 +158,6 @@ def parse_messe(html):
         text = "\n".join(lines)
         m = DATE_RE.search(text)
         
-        # Falls kein Standard-Datumsbereich da ist, nach "bis DD.MM." Ausschau halten
         if not m and "Veranstaltungsort" in text:
             m_single = re.search(r"(\d{2})\.(\d{2})\.(\d{4})", text)
             m_bis = re.search(r"bis\s+(\d{1,2})\.(\d{1,2})\.", text, re.IGNORECASE)
@@ -167,7 +166,7 @@ def parse_messe(html):
                 if m_bis:
                     end_day = m_bis[1].zfill(2)
                     end_month = m_bis[2].zfill(2)
-                    end_year = m_single[3] # Gleiches Jahr annehmen
+                    end_year = m_single[3]
                     end = f"{end_year}-{end_month}-{end_day}"
                 else:
                     end = start
@@ -264,11 +263,24 @@ def deg(page):
         time_str = m_time[1] if m_time else ""
         note = f"Beginn: {time_str} Uhr" if time_str else "Beginn noch offen"
 
+        # Gegner aus dem Text extrahieren
+        opponent = ""
+        parts = [p.strip() for p in text.split("|") if p.strip()]
+        for p in parts:
+            if "DEG" not in p and "Düsseldorf" not in p and not re.search(r"\d", p) and len(p) > 2 and "Dome" not in p and "Heim" not in p:
+                opponent = p
+                break
+        
+        if not opponent:
+            opponent = "Heimspiel"
+
+        title = f"DEG - {opponent}"
+
         if (date_iso, time_str) in seen:
             continue
         seen.add((date_iso, time_str))
 
-        out.append([date_iso, "", "DEG - Heimspiel", "dome", note])
+        out.append([date_iso, "", title, "dome", note])
         
     return out
 
@@ -305,7 +317,8 @@ def main():
 
     events = []
     for venue in ["arena", "dome", "meh", "messe"]:
-        got = [e for e in new.get(venue, []) if not (venue == "arena" and "Fortuna" in e[2]) and not (venue == "dome" and e[2].startswith("DEG"))]
+        # Im Dome alle Einträge herausfiltern, die "Duesseldorfer" oder "DEG" enthalten (damit D.LIVE sie nicht doppelt liefert)
+        got = [e for e in new.get(venue, []) if not (venue == "arena" and "Fortuna" in e[2]) and not (venue == "dome" and ("Duesseldorfer" in e[2] or "DEG" in e[2]))]
         
         if venue == "arena":
             got += new.get("fortuna", [])
@@ -321,9 +334,9 @@ def main():
             got += [e for e in old if e[3] == "arena" and e[2].startswith("Fortuna")]
 
         if venue == "dome" and not new.get("dome"):
-            got += [e for e in old if e[3] == "dome" and not e[2].startswith("DEG")]
+            got += [e for e in old if e[3] == "dome" and not ("Duesseldorfer" in e[2] or "DEG" in e[2])]
         if venue == "dome" and not new.get("deg"):
-            got += [e for e in old if e[3] == "dome" and e[2].startswith("DEG")]
+            got += [e for e in old if e[3] == "dome" and ("Duesseldorfer" in e[2] or "DEG" in e[2])]
 
         events += got
         

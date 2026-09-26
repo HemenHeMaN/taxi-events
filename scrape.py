@@ -1,5 +1,4 @@
-"""Holt Events von D.LIVE (Arena, Dome, MEH), Messe Düsseldorf und Fortunas Heimspiele.
-Schreibt events.json. Fällt eine Quelle aus, bleiben deren alte Einträge erhalten."""
+# scrape.py
 import json, re, pathlib, datetime as dt, requests
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
@@ -11,24 +10,35 @@ DLIVE = {
     "meh": "https://www.mitsubishi-electric-halle.de/events-tickets/eventkalender",
 }
 MESSE = "https://www.messe-duesseldorf.de/de/messen_und_events/messen_national_und_international"
-FORTUNA = "https://www.fussballdaten.de/vereine/fortuna-duesseldorf/spielplan/"
+FORTUNA = "https://www.fussballdaten.de/3liga/vereine/fortuna-duesseldorf/spielplan/"
 UA = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/124 Safari/537.36"}
 TODAY = dt.datetime.now().date().isoformat()
 
+# D.LIVE:
+# Die Kalenderseite liefert Datum/Titel/Detail-Link.
+# Die eigentliche Uhrzeit steht zuverlässig auf der jeweiligen Event-Detailseite.
+# Deshalb öffnen wir jede Detailseite und lesen dort Einlass/Beginn/Ende aus.
 JS_DETAIL = r"""() => {
     const body = document.body ? document.body.innerText : "";
+    const clean = s => (s || "").replace(/\s+/g, " ").trim();
+
+    // D.LIVE stellt die Werte als "Einlass: 18:30 Beginn: 20:00 Ende: 23:00"
+    // dar. Wir suchen gezielt nach diesen Bezeichnungen.
     const get = label => {
         const re = new RegExp(label + "\\s*:?\\s*(\\d{1,2}[:.]\\d{2})", "i");
         const m = body.match(re);
         return m ? m[1].replace(".", ":") + " Uhr" : "";
     };
+
     const einlass = get("Einlass");
     const beginn  = get("Beginn");
     const ende    = get("Ende");
+
     const parts = [];
     if (einlass) parts.push("Einlass: " + einlass);
     if (beginn)  parts.push("Beginn: " + beginn);
     if (ende)    parts.push("Ende: " + ende);
+
     return parts.join(" | ");
 }"""
 
@@ -49,6 +59,7 @@ def slug_title(slug):
     return re.sub(r"-\d{2}-\d{2}-\d{4}$", "", slug).replace("-", " ").title()
 
 def detail_time(page, href):
+    """Öffnet eine D.LIVE-Detailseite und liest Einlass/Beginn/Ende."""
     try:
         page.goto(href, wait_until="domcontentloaded", timeout=45000)
         page.wait_for_timeout(700)
@@ -59,12 +70,17 @@ def detail_time(page, href):
 
 def dlive(page, venue, url):
     page.goto(url, wait_until="networkidle", timeout=60000)
+
+    # Manche Kalender (z.B. MEH) laden die erste Event-Liste erst per
+    # JavaScript nach dem eigentlichen Seitenaufbau. Kurz darauf warten,
+    # bevor wir nach Datums-Links suchen.
     try:
         page.wait_for_selector('a[href]', timeout=5000)
         page.wait_for_timeout(1500)
     except Exception:
         pass
 
+    # Alle Events nachladen.
     for _ in range(40):
         btn = page.get_by_text("Mehr Events anzeigen")
         if btn.count() == 0 or not btn.first.is_visible():
@@ -76,28 +92,35 @@ def dlive(page, venue, url):
             break
 
     links = page.eval_on_selector_all('a[href]', JS_CALENDAR)
+
     found = {}
     for href, title in links:
         if not href:
             continue
+
         slug = href.rstrip("/").split("/")[-1]
         m = re.search(r"(\d{2})-(\d{2})-(\d{4})$", slug)
         if not m:
             continue
+
         date = f"{m[3]}-{m[2]}-{m[1]}"
         title = title.strip() if title else slug_title(slug)
+
         found[href] = (date, title)
 
     out = []
     print(venue, "-", len(found), "Termine gefunden")
+
     for href, (date, title) in found.items():
         uhrzeit = detail_time(page, href)
         out.append([date, "", title, venue, uhrzeit])
+
     return out
 
 GERMAN_DAYS = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 DAY_RE = r"(?:täglich|Mo|Di|Mi|Do|Fr|Sa|So)(?:\s*-\s*(?:Mo|Di|Mi|Do|Fr|Sa|So))?"
 DATE_RE = re.compile(r"(\d{2})\.(\d{2})\.(\d{4})(?:\s*-\s*(\d{2})\.(\d{2})\.(\d{4}))?")
+
 
 def parse_opening_hours(lines):
     hours = {}
@@ -122,6 +145,7 @@ def parse_opening_hours(lines):
             hours[d1] = (start, end)
     return hours
 
+
 def expand_to_daily_rows(start_iso, end_iso, name, hours):
     d0 = dt.date.fromisoformat(start_iso)
     d1 = dt.date.fromisoformat(end_iso) if end_iso else d0
@@ -135,6 +159,7 @@ def expand_to_daily_rows(start_iso, end_iso, name, hours):
         rows.append(row)
         cur += dt.timedelta(days=1)
     return rows
+
 
 def parse_messe(html):
     soup = BeautifulSoup(html, "html.parser")
@@ -167,6 +192,7 @@ def parse_messe(html):
             out.append([start, end if end != start else "", name, "messe"])
     return out
 
+
 def messe(page):
     try:
         rows = parse_messe(requests.get(MESSE, headers=UA, timeout=30).text)
@@ -177,23 +203,53 @@ def messe(page):
     page.goto(MESSE, wait_until="networkidle")
     return parse_messe(page.content())
 
+
 def fortuna():
-    soup = BeautifulSoup(requests.get(FORTUNA, headers=UA, timeout=30).text, "html.parser")
-    games = {}
-    for a in soup.select("a[title]"):
-        m = re.match(r"Fortuna Düsseldorf - (.+?) \| (\d{2})\.(\d{2})\.(\d{4}) \| (.+?) \|", a["title"])
-        if not m:
-            continue
-        g = games.setdefault(a["href"], {"opp": m[1], "date": f"{m[4]}-{m[3]}-{m[2]}", "comp": m[5], "time": None})
-        t = re.search(r"(\d{2}:\d{2})\s*Uhr", a.get_text())
-        if t:
-            g["time"] = t[1]
-    out = []
-    for g in games.values():
-        pokal = "DFB" in g["comp"]
-        note = (f"Anstoß: {g['time']} Uhr" if g["time"] else "Anstoß noch offen")
-        out.append([g["date"], "", f"Fortuna – {g['opp']}", "arena", ("DFB-Pokal, " if pokal else "") + note])
-    return out
+    try:
+        resp = requests.get(FORTUNA, headers=UA, timeout=30)
+        soup = BeautifulSoup(resp.text, "html.parser")
+        games = {}
+        
+        # Flexiblerer Ansatz, um die Spielplan-Tabelle oder Links abzugreifen
+        for a in soup.select("a[title]"):
+            title_attr = a["title"]
+            # Flexibleres Regex für unterschiedliche Titel-Formate (z.B. mit 3. Liga Kennzeichnung)
+            m = re.search(r"Fortuna Düsseldorf\s*-\s*(.+?)\s*\|\s*(\d{2})\.(\d{2})\.(\d{4})", title_attr)
+            if not m:
+                continue
+            
+            opp = m[1].strip().split("|")[0].strip()
+            date_str = f"{m[4]}-{m[3]}-{m[2]}"
+            
+            # Wettbewerb und Anstoßzeit ermitteln
+            comp = "3. Liga"
+            if "|" in title_attr:
+                parts = [p.strip() for p in title_attr.split("|")]
+                if len(parts) > 2:
+                    comp = parts[2]
+            
+            g = games.setdefault(a.get("href", title_attr), {"opp": opp, "date": date_str, "comp": comp, "time": None})
+            
+            # Anstoßzeit im Text oder Element suchen
+            t = re.search(r"(\d{2}:\d{2})\s*Uhr", a.get_text())
+            if not t:
+                # Versuche im Parent/Sibling nach der Uhrzeit zu suchen
+                parent_text = a.parent.get_text() if a.parent else ""
+                t = re.search(r"(\d{2}:\d{2})\s*Uhr", parent_text)
+            if t:
+                g["time"] = t[1]
+                
+        out = []
+        for g in games.values():
+            pokal = "DFB" in g["comp"] or "Pokal" in g["comp"]
+            note = (f"Anstoß: {g['time']} Uhr" if g['time'] else "Anstoß noch offen")
+            prefix = "DFB-Pokal, " if pokal else ""
+            out.append([g["date"], "", f"Fortuna – {g['opp']}", "arena", prefix + note])
+        print("Fortuna:", len(out), "Spiele gefunden")
+        return out
+    except Exception as e:
+        print("fortuna Fehler:", e)
+        return []
 
 def main():
     old = json.loads(OUT.read_text(encoding="utf-8"))["events"] if OUT.exists() else []
@@ -211,7 +267,6 @@ def main():
         except Exception as e:
             print("messe Fehler:", e)
         browser.close()
-        
     try:
         new["fortuna"] = fortuna()
     except Exception as e:
@@ -240,4 +295,5 @@ def main():
     OUT.write_text(json.dumps({"updated": TODAY, "events": events}, ensure_ascii=False, indent=0), encoding="utf-8")
     print(len(events), "Events geschrieben")
 
-main()
+if __name__ == "__main__":
+    main()

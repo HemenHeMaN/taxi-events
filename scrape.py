@@ -56,6 +56,30 @@ JS_CALENDAR = r"""els => els.map(e => {
 def slug_title(slug):
     return re.sub(r"-\d{2}-\d{2}-\d{4}$", "", slug).replace("-", " ").title()
 
+def normalize(s):
+    """Normalisiert Umlaute/ß, damit Textvergleiche unabhängig von der
+    tatsächlich verwendeten Schreibweise (ü vs. ue, ß vs. ss) funktionieren."""
+    if not s:
+        return ""
+    repl = {
+        "ä": "ae", "ö": "oe", "ü": "ue",
+        "Ä": "Ae", "Ö": "Oe", "Ü": "Ue",
+        "ß": "ss",
+    }
+    for a, b in repl.items():
+        s = s.replace(a, b)
+    return s
+
+def is_deg_title(title):
+    """Erkennt Titel, die sich auf die Düsseldorfer EG (Eishockey) beziehen,
+    unabhängig von Umlaut-Schreibweise. Prüft NICHT nur auf 'DEG' als Substring,
+    weil das z.B. in anderen Wörtern zufällig vorkommen könnte."""
+    t = normalize(title)
+    return bool(re.search(r"\bDEG\b", title)) or "Duesseldorfer EG" in t
+
+def is_fortuna_title(title):
+    return "Fortuna" in title
+
 def detail_time(page, href):
     try:
         page.goto(href, wait_until="domcontentloaded", timeout=45000)
@@ -157,7 +181,7 @@ def parse_messe(html):
         lines = [l.strip() for l in li.get_text("\n", strip=True).split("\n") if l.strip()]
         text = "\n".join(lines)
         m = DATE_RE.search(text)
-        
+
         if not m and "Veranstaltungsort" in text:
             m_single = re.search(r"(\d{2})\.(\d{2})\.(\d{4})", text)
             m_bis = re.search(r"bis\s+(\d{1,2})\.(\d{1,2})\.", text, re.IGNORECASE)
@@ -170,18 +194,18 @@ def parse_messe(html):
                     end = f"{end_year}-{end_month}-{end_day}"
                 else:
                     end = start
-                
+
                 name = lines[0] if lines else "Messe"
                 if (name, start) in seen_names:
                     continue
                 seen_names.add((name, start))
-                
+
                 out.append([start, end if end != start else "", name, "messe"])
                 continue
 
         if not m or "Veranstaltungsort" not in text or not lines or DATE_RE.match(lines[0]):
             continue
-            
+
         name = lines[0]
         start = f"{m[3]}-{m[2]}-{m[1]}"
         end = f"{m[6]}-{m[5]}-{m[4]}" if m[4] else start
@@ -233,6 +257,8 @@ def fortuna():
     return out
 
 def deg(page):
+    """Scrapt die offizielle DEG-Seite nach *Heimspielen* der Düsseldorfer EG
+    (die im Dome ausgetragen werden)."""
     try:
         page.goto(DEG_URL, wait_until="networkidle", timeout=60000)
         page.wait_for_timeout(2000)
@@ -270,7 +296,7 @@ def deg(page):
             if "DEG" not in p and "Düsseldorf" not in p and not re.search(r"\d", p) and len(p) > 2 and "Dome" not in p and "Heim" not in p:
                 opponent = p
                 break
-        
+
         if not opponent:
             opponent = "Heimspiel"
 
@@ -281,7 +307,7 @@ def deg(page):
         seen.add((date_iso, time_str))
 
         out.append([date_iso, "", title, "dome", note])
-        
+
     return out
 
 def main():
@@ -317,9 +343,17 @@ def main():
 
     events = []
     for venue in ["arena", "dome", "meh", "messe"]:
-        # Im Dome alle Einträge herausfiltern, die "Duesseldorfer" oder "DEG" enthalten (damit D.LIVE sie nicht doppelt liefert)
-        got = [e for e in new.get(venue, []) if not (venue == "arena" and "Fortuna" in e[2]) and not (venue == "dome" and ("Duesseldorfer" in e[2] or "DEG" in e[2]))]
-        
+        # Arena: eigene Fortuna-Einträge aus dem D.Live-Kalender rausfiltern,
+        # damit sie nicht doppelt mit den fussballdaten.de-Einträgen auftauchen.
+        # Dome: eigene DEG-Einträge aus dem D.Live-Kalender rausfiltern,
+        # damit sie nicht doppelt mit den deg-eishockey.de-Einträgen auftauchen.
+        # (is_deg_title/is_fortuna_title sind Umlaut-sicher, siehe oben)
+        got = [
+            e for e in new.get(venue, [])
+            if not (venue == "arena" and is_fortuna_title(e[2]))
+            and not (venue == "dome" and is_deg_title(e[2]))
+        ]
+
         if venue == "arena":
             got += new.get("fortuna", [])
         if venue == "dome":
@@ -327,26 +361,26 @@ def main():
 
         if not new.get(venue) and venue not in ["arena", "dome"]:
             got = [e for e in old if e[3] == venue]
-            
+
         if venue == "arena" and not new.get("arena"):
-            got += [e for e in old if e[3] == "arena" and not e[2].startswith("Fortuna")]
+            got += [e for e in old if e[3] == "arena" and not is_fortuna_title(e[2])]
         if venue == "arena" and not new.get("fortuna"):
-            got += [e for e in old if e[3] == "arena" and e[2].startswith("Fortuna")]
+            got += [e for e in old if e[3] == "arena" and is_fortuna_title(e[2])]
 
         if venue == "dome" and not new.get("dome"):
-            got += [e for e in old if e[3] == "dome" and not ("Duesseldorfer" in e[2] or "DEG" in e[2])]
+            got += [e for e in old if e[3] == "dome" and not is_deg_title(e[2])]
         if venue == "dome" and not new.get("deg"):
-            got += [e for e in old if e[3] == "dome" and ("Duesseldorfer" in e[2] or "DEG" in e[2])]
+            got += [e for e in old if e[3] == "dome" and is_deg_title(e[2])]
 
         events += got
-        
+
     extra = pathlib.Path("extra.json")
     if extra.exists():
         try:
             events += json.loads(extra.read_text(encoding="utf-8"))
         except Exception:
             pass
-        
+
     events = [e for e in events if (e[1] or e[0]) >= TODAY]
     events = sorted({json.dumps(e, ensure_ascii=False) for e in events})
     events = sorted((json.loads(e) for e in events), key=lambda e: (e[0], e[2]))

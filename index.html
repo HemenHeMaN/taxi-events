@@ -18,7 +18,6 @@ h1{font-size:30px;margin:4px 0 2px;font-weight:700}
 .filters-all{display:flex;margin-bottom:8px}
 .filters-all button{flex:1;padding:10px 16px;border-radius:8px}
 
-/* Untere Buttons ohne Abstand und mit eckigerem Design (leicht gerundet) */
 .filters-venues{display:flex;overflow-x:auto}
 .filters-venues button{
   flex: 1;
@@ -38,8 +37,11 @@ h1{font-size:30px;margin:4px 0 2px;font-weight:700}
 button{font:inherit;font-weight:600;border:2px solid var(--line);background:var(--card);color:var(--ink);padding:8px 16px;white-space:nowrap}
 button[aria-pressed="true"]{background:var(--now);border-color:var(--now);color:#1d1d1b;position:relative;z-index:1}
 button:focus-visible{outline:3px solid var(--ink);outline-offset:2px}
-h2{font-size:15px;color:var(--mute);margin:20px 0 6px;font-weight:600}
-h2.today{color:var(--ink);font-size:19px}
+
+/* Datum-Überschriften größer gemacht */
+h2{font-size:22px;color:var(--mute);margin:24px 0 8px;font-weight:700;letter-spacing:0.5px}
+h2.today{color:var(--ink);font-size:26px}
+
 #list{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:8px}
 #list h2,#list .empty{grid-column:1/-1}
 .ev{display:flex;gap:12px;align-items:center;background:var(--card);border-left:8px solid var(--c);border-radius:6px;padding:10px 12px;margin:0}

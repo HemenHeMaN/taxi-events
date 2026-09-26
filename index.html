@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Düsseldorf Events für Taxi</title>
+<style>
+:root{--bg:#f7f5ee;--card:#fff;--ink:#1d1d1b;--mute:#6b6a63;--line:#e3e0d3;--arena:#1e5aa8;--dome:#1f8a4c;--messe:#c4402f;--meh:#8a4fb0;--now:#f5b800;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#17170f;--card:#22221a;--ink:#f3f1e6;--mute:#a4a294;--line:#34342a;--arena:#6ea3ec;--dome:#5fc98a;--messe:#f0806f;--meh:#c39be6}}
+:root[data-theme="dark"]{--bg:#17170f;--card:#22221a;--ink:#f3f1e6;--mute:#a4a294;--line:#34342a;--arena:#6ea3ec;--dome:#5fc98a;--messe:#f0806f;--meh:#c39be6}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--ink);font:17px/1.35 "Barlow Condensed","Arial Narrow",system-ui,sans-serif}
+main{max-width:1000px;margin:0 auto;padding:16px 14px 40px}
+h1{font-size:30px;margin:4px 0 2px;font-weight:700}
+.sub{color:var(--mute);margin:0 0 14px;font-size:15px}
+.filters{position:sticky;top:env(safe-area-inset-top,0px);background:var(--bg);padding-bottom:10px}
+.filters-all{display:flex;margin-bottom:8px}
+.filters-all button{flex:1;padding:10px 16px;border-radius:8px}
+
+/* Untere Buttons ohne Abstand und mit eckigerem Design (leicht gerundet) */
+.filters-venues{display:flex;overflow-x:auto}
+.filters-venues button{
+  flex: 1;
+  border-radius: 0;
+  border-right-width: 0;
+}
+.filters-venues button:first-child{
+  border-top-left-radius: 6px;
+  border-bottom-left-radius: 6px;
+}
+.filters-venues button:last-child{
+  border-top-right-radius: 6px;
+  border-bottom-right-radius: 6px;
+  border-right-width: 2px;
+}
+
+button{font:inherit;font-weight:600;border:2px solid var(--line);background:var(--card);color:var(--ink);padding:8px 16px;white-space:nowrap}
+button[aria-pressed="true"]{background:var(--now);border-color:var(--now);color:#1d1d1b;position:relative;z-index:1}
+button:focus-visible{outline:3px solid var(--ink);outline-offset:2px}
+h2{font-size:15px;color:var(--mute);margin:20px 0 6px;font-weight:600}
+h2.today{color:var(--ink);font-size:19px}
+#list{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:8px}
+#list h2,#list .empty{grid-column:1/-1}
+.ev{display:flex;gap:12px;align-items:center;background:var(--card);border-left:8px solid var(--c);border-radius:6px;padding:10px 12px;margin:0}
+.ev.run{outline:2px solid var(--now)}
+.t{flex:1;min-width:0}
+.t b{font-size:20px;display:block;line-height:1.15}
+.t span{color:var(--mute);font-size:15px}
+.v{font-weight:700;color:var(--c);font-size:14px;text-align:center;white-space:nowrap;max-width:40%;line-height:1.2}
+.empty{padding:30px 0;color:var(--mute);text-align:center}
+footer{color:var(--mute);font-size:14px;margin-top:24px}
+footer a{color:inherit}
+</style>
+</head>
+<body>
+<main>
+<h1>🚕 Events heute und bald</h1>
+<p class="sub" id="today"></p>
+<div class="filters"><div class="filters-all" id="filters-all"></div><div class="filters-venues" id="filters-venues"></div></div>
+<div id="list"></div>
+<footer>Zuletzt aktualisiert: <span id="upd">-</span>. Quellen: <a href="https://www.mitsubishi-electric-halle.de/events-tickets/eventkalender">MEH</a>, <a href="https://www.merkur-spiel-arena.de/events-tickets/eventkalender">Arena</a>, <a href="https://www.psd-bank-dome.de/events-tickets/eventkalender">PSD Bank Dome</a>, <a href="https://www.messe-duesseldorf.de/de/messen_und_events/messen_national_und_international">Messe</a>. Fortuna-Heimspiele: <a href="https://www.fussballdaten.de/vereine/fortuna-duesseldorf/spielplan/">fussballdaten.de</a>. Uhrzeiten bitte dort prüfen, Spiele ohne Anstoßzeit sind noch nicht angesetzt.</footer>
+</main>
+<script>
+var V={
+  arena:{n:"Arena",c:"var(--arena)"},
+  dome:{n:"PSD Dome",c:"var(--dome)"},
+  messe:{n:"Messe",c:"var(--messe)"},
+  meh:{n:"Mitsubishi Halle",c:"var(--meh)"}
+};
+var E=[];
+var DATA_URL="events.json";
+var f="alle",n=new Date(),iso=n.getFullYear()+"-"+String(n.getMonth()+1).padStart(2,"0")+"-"+String(n.getDate()).padStart(2,"0");
+function d(s){return new Date(s+"T12:00:00")}
+function fmt(s,o){return d(s).toLocaleDateString("de-DE",o)}
+document.getElementById("today").textContent="Heute ist "+n.toLocaleDateString("de-DE",{weekday:"long",day:"numeric",month:"long",year:"numeric"});
+function draw(){
+ var flAll=document.getElementById("filters-all");flAll.innerHTML="";
+ var flVenues=document.getElementById("filters-venues");flVenues.innerHTML="";
+ [[flAll,[["alle","Alle"]]],[flVenues,[["arena","Arena"],["dome","PSD Dome"],["messe","Messe"],["meh","MEH"]]]].forEach(function(group){
+  group[1].forEach(function(x){
+   var b=document.createElement("button");b.textContent=x[1];b.setAttribute("aria-pressed",f===x[0]);
+   b.onclick=function(){f=x[0];draw()};group[0].appendChild(b);
+  });
+ });
+ var rows=E.filter(function(e){return (e[1]||e[0])>=iso&&(f==="alle"||e[3]===f)})
+  .sort(function(a,b){var ra=a[0]<=iso?iso:a[0],rb=b[0]<=iso?iso:b[0];return ra<rb?-1:ra>rb?1:0});
+ var out="",last="";
+ rows.forEach(function(e){
+  var run=e[0]<=iso,key=run?iso:e[0];
+  if(key!==last){last=key;
+   var diff=Math.round((d(key)-d(iso))/864e5);
+   var lab=diff===0?"Heute":diff===1?"Morgen":fmt(key,{weekday:"long",day:"numeric",month:"long"});
+   out+='<h2'+(diff===0?' class="today"':'')+'>'+lab+'</h2>';}
+  var sub=e[1]?(run?"läuft bis "+fmt(e[1],{day:"numeric",month:"numeric"}):"bis "+fmt(e[1],{day:"numeric",month:"numeric"})):"";
+  if(e[4])sub=(sub?sub+", ":"")+e[4];
+  var titel=(e[2].indexOf('Fortuna')===0?'\u26bd ':(e[2].indexOf('Duesseldorfer Eg')===0?'\ud83c\udfd2 ':''))+e[2];
+  out+='<div class="ev'+(run?' run':'')+'" style="--c:'+V[e[3]].c+'"><div class="t"><b>'+titel+'</b>'+(sub?'<span>'+sub+'</span>':'')+'</div><div class="v">'+V[e[3]].n+'</div></div>';
+ });
+ document.getElementById("list").innerHTML=out||'<div class="empty">Keine Events gefunden.</div>';
+}
+fetch(DATA_URL,{cache:"no-store"}).then(function(r){return r.json()}).then(function(j){
+ E=j.events;if(j.updated)document.getElementById("upd").textContent=fmt(j.updated,{day:"numeric",month:"numeric",year:"numeric"});draw();
+}).catch(function(){document.getElementById("list").innerHTML='<div class="empty">Events konnten nicht geladen werden.</div>'});
+</script>
+</body>
+</html>

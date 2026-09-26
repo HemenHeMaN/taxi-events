@@ -157,8 +157,32 @@ def parse_messe(html):
         lines = [l.strip() for l in li.get_text("\n", strip=True).split("\n") if l.strip()]
         text = "\n".join(lines)
         m = DATE_RE.search(text)
+        
+        # Falls kein Standard-Datumsbereich da ist, nach "bis DD.MM." Ausschau halten
+        if not m and "Veranstaltungsort" in text:
+            m_single = re.search(r"(\d{2})\.(\d{2})\.(\d{4})", text)
+            m_bis = re.search(r"bis\s+(\d{1,2})\.(\d{1,2})\.", text, re.IGNORECASE)
+            if m_single:
+                start = f"{m_single[3]}-{m_single[2]}-{m_single[1]}"
+                if m_bis:
+                    end_day = m_bis[1].zfill(2)
+                    end_month = m_bis[2].zfill(2)
+                    end_year = m_single[3] # Gleiches Jahr annehmen
+                    end = f"{end_year}-{end_month}-{end_day}"
+                else:
+                    end = start
+                
+                name = lines[0] if lines else "Messe"
+                if (name, start) in seen_names:
+                    continue
+                seen_names.add((name, start))
+                
+                out.append([start, end if end != start else "", name, "messe"])
+                continue
+
         if not m or "Veranstaltungsort" not in text or not lines or DATE_RE.match(lines[0]):
             continue
+            
         name = lines[0]
         start = f"{m[3]}-{m[2]}-{m[1]}"
         end = f"{m[6]}-{m[5]}-{m[4]}" if m[4] else start
@@ -228,7 +252,6 @@ def deg(page):
             continue
         date_iso = f"{m_date[3]}-{m_date[2]}-{m_date[1]}"
 
-        # Nur Heimspiele filtern (z.B. Kennzeichnung durch "Heim", "H" oder Nennung des PSD Bank Dome)
         is_home = False
         if (re.search(r"\bHeim\b|\bH\b", text, re.IGNORECASE) and not re.search(r"\bAuswärts\b|\bA\b", text, re.IGNORECASE)) or \
            ("PSD Bank Dome" in text or "PSD BANK DOME" in text):
@@ -241,14 +264,10 @@ def deg(page):
         time_str = m_time[1] if m_time else ""
         note = f"Beginn: {time_str} Uhr" if time_str else "Beginn noch offen"
 
-        # Gegner-Extraktion vereinfachen / Fallback
-        # Hier wird sichergestellt, dass "DEG - [Gegner]" ausgegeben wird
         if (date_iso, time_str) in seen:
             continue
         seen.add((date_iso, time_str))
 
-        # Platzhalter für Gegnererkennung aus dem Text falls spezifische Container fehlen
-        # (Standardmäßig wird DEG als Heimteam vorangestellt)
         out.append([date_iso, "", "DEG - Heimspiel", "dome", note])
         
     return out

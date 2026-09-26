@@ -94,7 +94,7 @@ function draw(){
    out+='<h2'+(diff===0?' class="today"':'')+'>'+lab+'</h2>';}
   var sub=e[1]?(run?"läuft bis "+fmt(e[1],{day:"numeric",month:"numeric"}):"bis "+fmt(e[1],{day:"numeric",month:"numeric"})):"";
   if(e[4])sub=(sub?sub+", ":"")+e[4];
-  var titel=(e[2].indexOf('Fortuna')===0?'\u26bd ':(e[2].indexOf('Duesseldorfer Eg')===0?'\ud83c\udfd2 ':''))+e[2];
+  var titel=(e[2].indexOf('Fortuna')===0?'\u26bd ':(e[2].indexOf('DEG')===0?'\ud83c\udfd2 ':''))+e[2];
   out+='<div class="ev'+(run?' run':'')+'" style="--c:'+V[e[3]].c+'"><div class="t"><b>'+titel+'</b>'+(sub?'<span>'+sub+'</span>':'')+'</div><div class="v">'+V[e[3]].n+'</div></div>';
  });
  document.getElementById("list").innerHTML=out||'<div class="empty">Keine Events gefunden.</div>';
